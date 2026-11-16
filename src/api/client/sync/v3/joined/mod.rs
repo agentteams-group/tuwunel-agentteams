@@ -145,6 +145,15 @@ pub(super) async fn load_room(
 	state_after: StateAfter,
 	filter: &FilterDefinition,
 ) -> Result<(JoinedRoom, HashSet<OwnedUserId>, HashSet<OwnedUserId>)> {
+	let restored = services
+		.state_accessor
+		.room_restore_count(room_id)
+		.await;
+	let since = if restored > since && restored <= next_batch {
+		0
+	} else {
+		since
+	};
 	let initial = since == 0;
 	let (timeline_pdus, limited, last_timeline_count) =
 		load_join_timeline(services, sender_user, room_id, since, next_batch, filter).await?;

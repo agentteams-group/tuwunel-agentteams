@@ -156,7 +156,15 @@ pub(super) async fn handle_room(
 	} = sync_info;
 
 	let WindowRoom { lists, membership, room_id, .. } = window_room;
-	let roomsince = room.roomsince;
+	let restored = services
+		.state_accessor
+		.room_restore_count(room_id)
+		.await;
+	let roomsince = if restored > room.roomsince && restored <= conn.next_batch {
+		0
+	} else {
+		room.roomsince
+	};
 
 	if departed(membership.as_ref()) {
 		return leave_or_ban_response(sync_info, conn, window_room, roomsince)

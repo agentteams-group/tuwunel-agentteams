@@ -2,16 +2,18 @@ use axum::{Json, extract::State, http::Uri};
 use futures::StreamExt;
 use ruma::{
 	OwnedUserId, RoomId, UserId,
-	api::client::membership::{joined_rooms, leave_room},
-	events::StateEventType,
-	serde::Raw,
+	api::client::{
+		membership::{joined_rooms, leave_room},
+		state::get_state_events,
+	},
+	events::{RoomAccountDataEventType, StateEventType},
 };
 use serde::Deserialize;
 use serde_json::json;
 use tuwunel_core::{Err, Result, err};
 use tuwunel_service::{Services, rooms::state_accessor::ROOM_ARCHIVE_EVENT_TYPE};
 
-use crate::{Ruma, RumaResponse, state::send_state_event_for_key_helper};
+use crate::{Ruma, RumaResponse};
 
 #[derive(Default, Deserialize)]
 pub(crate) struct ArchivedRoomsQuery {
@@ -29,6 +31,7 @@ pub(crate) async fn archived_rooms_route(
 	let query: ArchivedRoomsQuery = serde_html_form::from_str(uri.query().unwrap_or_default())
 		.map_err(|_| err!(Request(InvalidParam("Invalid archived room filters."))))?;
 	let sender = body.sender_user();
+	let privileged = services.admin.user_is_admin(sender).await;
 	let joined: Vec<_> = services
 		.state_cache
 		.rooms_joined(sender)
@@ -72,25 +75,45 @@ pub(crate) async fn archived_rooms_route(
 			}) {
 			continue;
 		}
-		let can_archive = services
-			.state_accessor
-			.get_power_levels(&room)
-			.await?
-			.user_can_send_state(sender, StateEventType::from(ROOM_ARCHIVE_EVENT_TYPE))
-			&& services
-				.state_accessor
-				.can_archive_task_room(sender, &room)
-				.await;
 		rooms.push(json!({
 			"room_id": room,
 			"name": services.state_accessor.get_name(&room).await.ok(),
 			"joined_member_count": services.state_cache.room_joined_count(&room).await?,
 			"room_meta": meta,
-			"can_archive": can_archive,
-			"can_delete": services.state_accessor.can_delete_task_room(sender, &room).await,
+			"can_archive": privileged,
+			"can_delete": privileged,
 		}));
 	}
 	Ok(Json(json!({"rooms": rooms})))
+}
+
+/// Controller reads the server-owned flag; joined members may inspect it too.
+pub(crate) async fn room_archive_status_route(
+	State(services): State<crate::State>,
+	body: Ruma<get_state_events::v3::Request>,
+) -> Result<Json<serde_json::Value>> {
+	let sender = body.sender_user();
+	let privileged = services.admin.user_is_admin(sender).await;
+	if !privileged
+		&& !services
+			.state_cache
+			.is_joined(sender, &body.room_id)
+			.await
+	{
+		return Err!(Request(Forbidden("Only room members may read archive status.")));
+	}
+	let meta = services
+		.state_accessor
+		.room_state_get_content::<serde_json::Value>(
+			&body.room_id,
+			&StateEventType::from("room.meta"),
+			"",
+		)
+		.await?;
+	let task = meta["roomKind"] == "task_room";
+	Ok(Json(
+		json!({"is_task_room": task, "archived": services.state_accessor.is_room_archived(&body.room_id).await, "room_meta": meta, "can_archive": task && privileged, "can_delete": task && privileged}),
+	))
 }
 
 /// Permanently delete only an archived task room, using server-controlled roles.
@@ -100,6 +123,9 @@ pub(crate) async fn delete_archived_room_route(
 ) -> Result<Json<serde_json::Value>> {
 	let room = &body.room_id;
 	let sender = body.sender_user();
+	if !services.admin.user_is_admin(sender).await {
+		return Err!(Request(Forbidden("Use the Controller's authorized task-room API.")));
+	}
 	// Hold the same lock used by archive/unarchive through the final purge.
 	let lock = services.state.mutex.lock(room).await;
 	if !services
@@ -108,15 +134,6 @@ pub(crate) async fn delete_archived_room_route(
 		.await
 	{
 		return Err!(Request(Forbidden("Only archived task rooms can be deleted.")));
-	}
-	if !services
-		.state_accessor
-		.can_delete_task_room(sender, room)
-		.await
-	{
-		return Err!(Request(Forbidden(
-			"Only an admin, Manager or this task's Team admin can delete it."
-		)));
 	}
 	let summary = services
 		.delete
@@ -153,16 +170,26 @@ async fn set_archived(
 	room: &RoomId,
 	archived: bool,
 ) -> Result {
-	// Use the ordinary state-event writer for membership, power levels and deduplication.
-	send_state_event_for_key_helper(
-		services,
-		sender,
-		room,
-		&StateEventType::from(ROOM_ARCHIVE_EVENT_TYPE),
-		&Raw::new(&json!({"archived": archived}))?.cast_unchecked(),
-		"",
-		None,
-	)
-	.await?;
+	if !services.admin.user_is_admin(sender).await {
+		return Err!(Request(Forbidden("Use the Controller's authorized task-room API.")));
+	}
+	let _lock = services.state.mutex.lock(room).await;
+	if !services.state_accessor.is_task_room(room).await {
+		return Err!(Request(Forbidden("Only task rooms can be archived or restored.")));
+	}
+	if services
+		.state_accessor
+		.is_room_archived(room)
+		.await == archived
+	{
+		return Ok(());
+	}
+	let count = services.globals.next_count();
+	services.account_data.update(Some(room), &services.globals.server_user,
+		RoomAccountDataEventType::from(ROOM_ARCHIVE_EVENT_TYPE),
+		&json!({"type": ROOM_ARCHIVE_EVENT_TYPE, "content": {"archived": archived, "count": *count, "actor": sender}}),
+	).await?;
+	drop(count);
+	services.sync.notify_room_archive_changed();
 	Ok(())
 }

@@ -154,7 +154,7 @@ fn register_client_room_routes(router: Router<State>) -> Router<State> {
 		)
 		.route(
 			"/_matrix/client/unstable/org.agentteams/rooms/{room_id}/archive",
-			post(client::archive_room_route),
+			post(client::archive_room_route).get(client::room_archive_status_route),
 		)
 		.route(
 			"/_matrix/client/unstable/org.agentteams/rooms/{room_id}/unarchive",

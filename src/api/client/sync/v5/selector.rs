@@ -170,6 +170,11 @@ async fn matcher(
 			.last_timeline_count(None, &room_id, Some(conn.next_batch.into()))
 			.await
 			.map(PduCount::into_unsigned);
+		let restored = services
+			.state_accessor
+			.room_restore_count(&room_id)
+			.await;
+		let result = result.map(|count| count.max(restored.min(conn.next_batch)));
 
 		activity_probe(result, &room_id, "timeline", false)
 	};

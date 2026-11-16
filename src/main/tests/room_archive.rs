@@ -47,8 +47,6 @@ fn room_archive_preserves_history_and_membership_for_every_member() -> Result {
 			"server_name=\"archive.test\"",
 			"admin.room.create=true",
 			"registration.grant_admin_to_first_user=false",
-			"rooms.task_room_managers=[\"@archive_manager:archive.test\"]",
-			"rooms.task_room_admins=[\"@archive_l1:archive.test\"]",
 		],
 		exercise,
 	)
@@ -56,6 +54,7 @@ fn room_archive_preserves_history_and_membership_for_every_member() -> Result {
 
 async fn exercise(services: &Services, base: &str) -> Result {
 	let owner_id = register(services, "archive_owner", OWNER_TOKEN).await?;
+	services.admin.make_user_admin(&owner_id).await?;
 	let worker_id = register(services, "archive_worker", WORKER_TOKEN).await?;
 	register(services, "archive_outsider", OUTSIDER_TOKEN).await?;
 	let owner = Client { services, base, token: OWNER_TOKEN };
@@ -166,8 +165,19 @@ async fn exercise(services: &Services, base: &str) -> Result {
 			.status(),
 		200
 	);
-	let state = get(&owner, &format!("rooms/{room}/state/{ARCHIVE_STATE}/")).await?;
-	assert_eq!(state, json!({"archived": true}));
+	let state = archive_status(&owner, &room).await?;
+	assert_eq!(state["archived"], true);
+	worker
+		.put(
+			&format!("user/{worker_id}/rooms/{room}/account_data/{ARCHIVE_STATE}"),
+			&json!({"archived": false}),
+		)
+		.await?;
+	assert_eq!(
+		archive_status(&worker, &room).await?["archived"],
+		true,
+		"a member's own account data cannot override the server flag"
+	);
 	let private_room = owner
 		.create_room(&json!({"name": "Other archived room"}))
 		.await?;
@@ -242,6 +252,7 @@ async fn exercise(services: &Services, base: &str) -> Result {
 		400
 	);
 	assert_archived_watcher(services, &worker_id, &room).await?;
+	let mut archived_positions = Vec::new();
 
 	for (member, position) in [&owner, &worker].into_iter().zip(&positions) {
 		// No client-side filter: the server must hide the room for all members.
@@ -278,7 +289,12 @@ async fn exercise(services: &Services, base: &str) -> Result {
 			)
 			.await?;
 		assert!(response["rooms"].get(room.as_str()).is_none(), "{response}");
-		assert_eq!(response["lists"]["main"]["count"], 1, "{response}");
+		assert_eq!(
+			response["lists"]["main"]["count"],
+			if member.token == OWNER_TOKEN { 2 } else { 1 },
+			"{response}"
+		);
+		archived_positions.push(response["pos"].as_str().unwrap().to_owned());
 		let joined = get(member, "joined_rooms").await?;
 		assert!(
 			joined["joined_rooms"]
@@ -327,8 +343,19 @@ async fn exercise(services: &Services, base: &str) -> Result {
 			.is_some(),
 		"{response}"
 	);
-	let state = get(&worker, &format!("rooms/{room}/state/{ARCHIVE_STATE}/")).await?;
-	assert_eq!(state, json!({"archived": false}));
+	let state = archive_status(&worker, &room).await?;
+	assert_eq!(state["archived"], false);
+	for (member, position) in [&owner, &worker]
+		.into_iter()
+		.zip(&archived_positions)
+	{
+		let restored = member.sliding_sync(Some(position), 0, &json!({"conn_id": "archive", "lists": {"main": {"ranges": [[0,10]], "required_state": [], "timeline_limit": 10}}})).await?;
+		assert_eq!(
+			restored["rooms"][room.as_str()]["initial"],
+			true,
+			"restoration must reset the room's sliding-sync baseline: {restored}"
+		);
+	}
 	assert_eq!(
 		accepted(
 			worker
@@ -385,49 +412,11 @@ async fn exercise(services: &Services, base: &str) -> Result {
 		base,
 		token: "archive-l1-access-token-20261116-0001",
 	};
-	for (allowed, id) in [
-		(&owner, owner_id.as_str()),
-		(&worker, worker_id.as_str()),
-		(&admin, admin_id.as_str()),
-		(&manager, "@archive_manager:archive.test"),
-		(&l1, "@archive_l1:archive.test"),
-	] {
-		let power = if id == owner_id.as_str() {
-			json!({})
-		} else {
-			json!({"users": {(id): 100}})
-		};
-		let target = owner
-			.create_room(&json!({"preset": "public_chat", "power_level_content_override": power}))
-			.await?;
-		owner.put(&format!("rooms/{target}/state/room.meta/"), &json!({"roomKind": "task_room", "teamAdmin": {"userId": owner_id}, "leaderWorker": {"userId": worker_id}})).await?;
-		allowed
-			.post(&format!("rooms/{target}/join"), &json!({}))
-			.await?;
-		assert_eq!(
-			set_archive(allowed, &target, "archive")
-				.await?
-				.status(),
-			200
-		);
-		if id == worker_id.as_str() {
-			let forged = worker.request(Method::PUT, &worker.url(&format!("rooms/{target}/state/room.meta/")), &json!({"roomKind": "task_room", "teamAdmin": {"userId": worker_id}, "leaderWorker": {"userId": worker_id}})).await?;
-			assert_eq!(forged.status(), 403, "Leader cannot promote itself to Team admin");
-			let url = owner.client_url("", &format!("{ARCHIVE_PATH}/{target}/delete"));
-			assert_eq!(
-				worker
-					.request(Method::POST, &url, &json!({}))
-					.await?
-					.status(),
-				403
-			);
+	// Business roles are resolved by Controller; direct Matrix calls cannot bypass it.
+	for denied in [&worker, &manager, &l1] {
+		for action in ["archive", "unarchive"] {
+			assert_eq!(set_archive(denied, &room, action).await?.status(), 403);
 		}
-		assert_eq!(
-			set_archive(allowed, &target, "unarchive")
-				.await?
-				.status(),
-			200
-		);
 	}
 	let elevated = owner.create_room(&json!({"preset": "public_chat", "power_level_content_override": {"users": {worker_id.as_str(): 100}}})).await?;
 	owner
@@ -475,7 +464,7 @@ async fn exercise(services: &Services, base: &str) -> Result {
 			.status(),
 		200
 	);
-	for allowed in [&owner, &admin, &manager] {
+	for allowed in [&owner, &admin] {
 		let target = owner
 			.create_room(&json!({"preset": "public_chat"}))
 			.await?;
@@ -572,10 +561,16 @@ fn room_archive_survives_restart() -> Result {
 		return boot_at(
 			&database,
 			harnesses,
-			["logging.enable=false", "database.pool.max_workers=16"],
+			[
+				"logging.enable=false",
+				"database.pool.max_workers=16",
+				"admin.room.create=true",
+				"registration.grant_admin_to_first_user=false",
+			],
 			async |services, base| {
 				if phase == "seed" {
-					register(services, "archive_persist", PERSIST_TOKEN).await?;
+					let user = register(services, "archive_persist", PERSIST_TOKEN).await?;
+					services.admin.make_user_admin(&user).await?;
 				}
 				let client = Client { services, base, token: PERSIST_TOKEN };
 				let room = if phase == "seed" {
@@ -659,6 +654,19 @@ fn room_archive_survives_restart() -> Result {
 	}
 	remove_dir_all(database)?;
 	Ok(())
+}
+
+async fn archive_status(client: &Client<'_>, room: &RoomId) -> Result<Value> {
+	accepted(
+		client
+			.request(
+				Method::GET,
+				&client.client_url("", &format!("{ARCHIVE_PATH}/{room}/archive")),
+				&json!({}),
+			)
+			.await?,
+	)
+	.await
 }
 
 async fn set_archive(

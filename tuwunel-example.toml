@@ -4794,15 +4794,6 @@
 #
 #[global.rooms]
 
-# Trusted AgentTeams global administrator (L1/ALE) Matrix IDs.
-#
-#task_room_admins = []
-
-# Trusted AgentTeams Manager Matrix IDs allowed to delete archived task rooms.
-# Set by the homeserver operator; a username or room power level alone grants no role.
-#
-#task_room_managers = []
-
 # Sets the default `m.federate` property for newly created rooms when the
 # client does not request one.
 #

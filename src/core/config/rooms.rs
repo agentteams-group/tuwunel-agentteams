@@ -5,7 +5,7 @@
 //! extremities.
 
 use regex::RegexSet;
-use ruma::{OwnedUserId, RoomVersionId};
+use ruma::RoomVersionId;
 use serde::Deserialize;
 use serde_json::Value;
 use tuwunel_macros::config_example_generator;
@@ -49,15 +49,6 @@ use super::true_fn;
 	ignore = "delayed_events extremities invites joins policy_server redaction relations"
 )]
 pub struct Rooms {
-	/// Trusted AgentTeams global administrator (L1/ALE) Matrix IDs.
-	/// default: []
-	#[serde(default)]
-	pub task_room_admins: Vec<OwnedUserId>,
-	/// Trusted AgentTeams Manager Matrix IDs allowed to delete archived task rooms.
-	/// Set by the homeserver operator; a username or room power level alone grants no role.
-	/// default: []
-	#[serde(default)]
-	pub task_room_managers: Vec<OwnedUserId>,
 	/// Sets the default `m.federate` property for newly created rooms when the
 	/// client does not request one.
 	///
@@ -673,8 +664,6 @@ pub struct Relations {
 impl Default for Rooms {
 	fn default() -> Self {
 		Self {
-			task_room_admins: Vec::new(),
-			task_room_managers: Vec::new(),
 			federate_by_default: true_fn(),
 			forget_forced_upon_leave: Default::default(),
 			prune_require_forgotten: true_fn(),

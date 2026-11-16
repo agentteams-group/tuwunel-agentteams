@@ -1,60 +1,61 @@
-# Room archive extension
+# Task room archive extension
 
-Archive a finished task room (`room.meta.roomKind = "task_room"`) to stop delivering it through sync for **every
-member on this homeserver**, while preserving membership and history access.
-This is an AgentTeams extension, not a standard Matrix API.
-Direct messages, ordinary groups and Team rooms cannot be archived, restored
-or deleted through this extension. Room names are not used to infer their type.
+Archive finished task rooms to stop `/sync` delivery for every local member,
+while retaining membership, messages and history access. Only rooms explicitly
+marked `room.meta.roomKind = "task_room"` are eligible. Direct messages, ordinary
+groups and Team rooms cannot be archived or deleted through this extension.
 
-## API
+## Authorization and call chain
 
-Authenticated requests with an empty JSON body:
+Browser -> Dashboard API -> AgentTeams Controller -> Tuwunel.
+
+Controller authenticates the real caller and resolves current Human, Manager,
+Worker and Team CR permissions. The room's current owning Team is resolved by
+`room.meta.teamName`, supporting the Team CR name/effective storage-name mapping.
+The owning team and task-room kind cannot be changed through room state updates.
+
+| Controller caller | Archive / restore | Delete |
+| --- | --- | --- |
+| Admin / L1 (ALE) | Yes | Yes |
+| Manager | Yes | Yes |
+| This task's current Team admin | Yes | Yes |
+| This task's current Team Leader | Yes | No |
+| Ordinary humans / Workers / another team's admin or Leader | No | No |
+
+The Controller requires the current Team CR relationship, rather than trusting
+client role parameters, room power levels or an old `teamAdmin` metadata field.
+Lifecycle writes are audited using the authenticated caller's identity.
+
+Tuwunel accepts lifecycle writes only from a homeserver administrator, whose
+credential stays on the Controller. Normal Matrix tokens cannot bypass Controller
+RBAC, even if the token belongs to a room creator or has power level 100.
+Controller calls can archive/restore without joining that administrative account
+to the task room or modifying anybody's power level. No static L1/Manager account
+allowlists are needed in Tuwunel.
+
+## APIs
+
+Controller APIs (authenticated with the existing Controller/Human bearer token):
 
 ```text
-POST /_matrix/client/unstable/org.agentteams/rooms/{roomId}/archive
-POST /_matrix/client/unstable/org.agentteams/rooms/{roomId}/unarchive
-POST /_matrix/client/unstable/org.agentteams/rooms/{roomId}/delete
-GET  /_matrix/client/unstable/org.agentteams/rooms/archived
+GET  /api/v1/task-rooms/archived
+GET  /api/v1/task-rooms/{roomId}/archive
+POST /api/v1/task-rooms/{roomId}/archive
+POST /api/v1/task-rooms/{roomId}/unarchive
+POST /api/v1/task-rooms/{roomId}/delete
 ```
 
-Archive and unarchive return `200 {}` and are idempotent. They require both
-an authorized business role and normal Matrix state-event authorization:
-the caller must be joined and able to send `org.agentteams.room.archive`.
-The same checks apply when writing that marker through the standard state API.
+The corresponding Tuwunel extension lives at
+`/_matrix/client/unstable/org.agentteams/rooms`. POST operations are restricted
+to the homeserver administrator. GET room status is available to that service
+identity and joined members. The ordinary room-state archive event is reserved;
+writing it directly is rejected. A member's own room account data cannot change
+the server-owned archive flag.
 
-| Role | Archive / restore | Delete |
-| --- | --- | --- |
-| Global admin / L1 (ALE) | Yes | Yes |
-| Manager | Yes | Yes |
-| This task's Team admin | Yes | Yes |
-| This task's Team Leader | Yes | No |
-| Other humans / Workers / another team's admin or Leader | No | No |
-
-The Team admin and Leader identities come from the existing `room.meta`
-fields `teamAdmin.userId` and `leaderWorker.userId`. A room power level alone
-does not grant a business role. A Leader cannot promote itself to Team admin
-by changing the metadata. Existing rooms cannot change to or from `task_room`.
-
-Tuwunel knows homeserver administrators but does not resolve AgentTeams
-Controller roles. Configure trusted full Matrix IDs for platform L1 users and
-Managers on the server; never infer these roles from a username or a request
-parameter. Empty lists grant nobody additional access:
-
-```toml
-[global.rooms]
-task_room_admins = ["@platform-admin:example.org"]
-task_room_managers = ["@manager:example.org"]
-```
-
-These roles supplement the existing Matrix room permissions for archive and
-restore; they do not automatically join users or change room power levels.
-
-### Query and history
-
-The list response is `{"rooms": [...]}`. Each entry contains `room_id`,
-`name`, `joined_member_count`, `room_meta`, `can_archive` and `can_delete`.
-Only the authenticated account's **joined archived task rooms** are listed.
-Optional filters are ANDed and only narrow that accessible set:
+The list returns `{"rooms": [...]}` with `room_id`, `name`,
+`joined_member_count`, `room_meta`, `can_archive` and `can_delete`. It starts from
+the account's joined archived task rooms and is narrowed by Controller team
+access. Optional ANDed filters reuse the existing TeamHarness metadata:
 
 ```text
 ?team=design
@@ -62,57 +63,41 @@ Optional filters are ANDed and only narrow that accessible set:
 ?human_member=%40bob%3Aexample.org
 ```
 
-Filters match `room.meta.teamName`, `teamAdmin.userId`, and
-`humanMembers[].userId`, respectively, reusing the task room metadata written
-by TeamHarness. Missing legacy metadata does not guess a match. Supplying a
-different account's ID never impersonates it or grants its room access.
+They match `room.meta.teamName`, `teamAdmin.userId`, and
+`humanMembers[].userId`. A filtered account is not impersonated and does not
+grant additional room access. Missing metadata does not guess a match.
+Room status returns `is_task_room`, `archived`, `can_archive` and `can_delete`;
+the Dashboard uses the Controller's capabilities rather than deriving roles.
 
-Read messages, threads, state and attachments with the existing Matrix APIs,
-on demand. Listing and viewing do not unarchive the room.
+Archive and unarchive return `200 {}` and can safely be repeated. The archive
+flag is stored as room account data belonging to the homeserver's internal
+server user, using existing storage and counters. Unarchive's counter forces a
+fresh room baseline in both legacy and Sliding Sync, including after restart.
+No ordinary Matrix history event or membership event is changed by archiving.
 
-### Delete
+## Behavior and deletion
 
-Delete requires **both** `task_room` and an archived flag, checked under the
-same room lock used by archive/restore. Only an admin, Manager or the task's
-Team admin may delete; the Leader role alone is insufficient. It returns
-`{"deleted":true,"failed_to_kick_users":[]}` after the existing local room
-shutdown/purge operation and blocks the room against rejoining. This removes
-local room history and aliases; it does not delete workspace artifacts,
-independently stored media or copies on another federated homeserver. The
-upstream homeserver administration APIs retain their own behavior.
+- Legacy sync omits archived joined, invited, knocked and left rooms.
+- Sliding sync omits archived list entries and explicit subscriptions, including
+  room-scoped extensions. Archived rooms have no per-room sync watchers.
+- Lifecycle changes wake parked sync requests. Restoration needs no rejoin or
+  new account login. An already generated response may still be in flight.
+- The archived-room list and history are fetched on demand. Viewing history
+  does not restore sync. Normal Matrix history and attachment permissions apply.
+- The Dashboard keeps archived conversations and threads read only. Restore
+  before sending follow-up instructions or edits.
+- Archiving does not freeze writes from arbitrary third-party Matrix clients,
+  ban members, or change another homeserver's behavior in a federated room.
+- Delete rechecks `task_room` and the archived flag under the same room lock
+  used by archive/restore, then uses the existing local shutdown/purge operation
+  and blocks the room against rejoining. Its result is
+  `{"deleted":true,"failed_to_kick_users":[]}`. Workspace artifacts and
+  independently stored media are retained; other homeservers' copies are outside
+  this server's control. Upstream general administration APIs retain their own
+  behavior.
 
-Read the current flag through the existing state API:
-
-```text
-GET /_matrix/client/v3/rooms/{roomId}/state/org.agentteams.room.archive/
-```
-
-An archived room has `{"archived": true}` at the empty state key. Unarchiving
-writes `{"archived": false}`. A missing state event means the room is active.
-Existing state-event APIs can also update this event under the same permissions.
-
-## Behavior
-
-- Legacy `/sync` omits archived rooms from joined, invited, knocked and left
-  room sections, independently of client filters.
-- Sliding sync omits archived rooms from lists and explicit room subscriptions.
-  Room-scoped account data, receipts and typing follow the selected window.
-- Sync does not register per-room timeline, typing or receipt watchers for
-  archived rooms. Local archive state writes wake parked sync requests so
-  restoration does not require a rejoin or client restart. Other account-wide
-  updates may still wake the account's shared sync loop.
-- Memberships, room aliases, existing events, attachments and history permissions
-  are preserved. Use the existing `/messages`, `/state` and event APIs to read
-  history on demand; `joined_rooms` still includes the room.
-- Archiving controls sync delivery. It does not ban members, freeze writes,
-  delete data, or change another homeserver's behavior in a federated room.
-  An already generated response may still be in flight when archive completes.
-
-The caller should finish and verify artifact uploads before archiving. Task
-status and artifact storage remain the responsibility of AgentTeams.
-The Dashboard provides a separate archived-task list with account-role
-filters, historical message viewing, restoration and permission-gated deletion.
-Its archived conversation and thread composers are read only until restored.
+Finish task acceptance and verify workspace artifact uploads before archiving.
+Task completion and artifact storage remain AgentTeams responsibilities.
 
 ## Upgrade compatibility
 
@@ -121,7 +106,7 @@ The feature branch is based on the upstream **v2.0.0** release tag
 
 This feature adds **no database tables, column families, schema version,
 migration, message encoding or membership encoding**. Its only persisted data
-is an ordinary custom Matrix state event stored through the existing writer.
+is a server-owned room account-data record stored in the existing account-data maps. A previous feature-branch room-state marker is read as a fallback until the first lifecycle operation replaces it.
 Rooms created before installing this feature have no flag and behave as before.
 Archive state persists across restarts.
 
@@ -174,18 +159,9 @@ startup grace period for a large existing database.
 
 ## Validation
 
-```sh
-RUST_TEST_THREADS=1 cargo test -p tuwunel --no-default-features --test room_archive
-```
-
-The integration tests cover owner and Worker sync, ordinary member and outsider
-authorization, existing sliding-sync connections and explicit subscriptions,
-unchanged historical events, retained membership, repeat archive, restoration
-with an existing token, watcher exclusion, restore wake-up and database restart.
-They also cover account-role query filters, outsider isolation, non-task room
-rejection, all five allowed archive identities, Leader deletion denial,
-metadata privilege escalation, elevated Workers without a business role,
-authorized deletion and legacy room-version-10 creation/archive/restore.
-Both tests passed locally on 2026-11-16. On this macOS host, Apple's linker
-asserted on a generated symbol name; selecting its `-ld_classic` linker allowed
-the tests to link and run. No linker configuration was added to the repository.
+Run `RUST_TEST_THREADS=1 cargo test -p tuwunel --no-default-features --test room_archive`.
+The HTTP fixture verifies service-only writes, task-only eligibility, account filters,
+member isolation, member-owned account-data spoofing, v3/v5 sync exclusion and
+restoration, watcher behavior, unchanged history, retained membership, authorized
+purge, room-version-10 compatibility and database restart. Controller separately
+tests the full business-role matrix and current Team ownership.

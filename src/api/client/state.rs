@@ -225,31 +225,15 @@ pub(super) async fn send_state_event_for_key_helper(
 				"An existing room cannot change to or from task_room."
 			)));
 		}
-		if current["roomKind"] == "task_room"
-			&& current["teamAdmin"] != next["teamAdmin"]
-			&& !services
-				.state_accessor
-				.can_delete_task_room(sender, room_id)
-				.await
-		{
-			return Err!(Request(Forbidden(
-				"Only task administrators may change the task's Team admin."
-			)));
+		if current["roomKind"] == "task_room" && current["teamName"] != next["teamName"] {
+			return Err!(Request(Forbidden("A task room cannot change its owning team.")));
 		}
 	}
 	if event_type
 		== &StateEventType::from(tuwunel_service::rooms::state_accessor::ROOM_ARCHIVE_EVENT_TYPE)
-		&& (!services
-			.state_accessor
-			.is_task_room(room_id)
-			.await || !services
-			.state_accessor
-			.can_archive_task_room(sender, room_id)
-			.await)
 	{
 		return Err!(Request(Forbidden(
-			"Only task rooms and authorized task administrators or leaders can archive or \
-			 restore."
+			"Archive state is server-owned; use the Controller's task-room API."
 		)));
 	}
 
