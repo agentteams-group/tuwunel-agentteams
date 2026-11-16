@@ -145,6 +145,14 @@ fn register_client_keys_and_backup_routes(router: Router<State>) -> Router<State
 fn register_client_room_routes(router: Router<State>) -> Router<State> {
 	router
 		.route(
+			"/_matrix/client/unstable/org.agentteams/rooms/{room_id}/delete",
+			post(client::delete_archived_room_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.agentteams/rooms/archived",
+			get(client::archived_rooms_route),
+		)
+		.route(
 			"/_matrix/client/unstable/org.agentteams/rooms/{room_id}/archive",
 			post(client::archive_room_route),
 		)

@@ -151,9 +151,10 @@ pub(crate) use self::{
 	},
 	report::{report_event_route, report_room_route, report_user_route},
 	room::{
-		archive_room_route, create_room_route, get_event_by_timestamp_route,
-		get_room_aliases_route, get_room_event_route, get_room_summary, get_room_summary_legacy,
-		room_initial_sync_route, unarchive_room_route, upgrade_room_route,
+		archive_room_route, archived_rooms_route, create_room_route, delete_archived_room_route,
+		get_event_by_timestamp_route, get_room_aliases_route, get_room_event_route,
+		get_room_summary, get_room_summary_legacy, room_initial_sync_route, unarchive_room_route,
+		upgrade_room_route,
 	},
 	rtc::get_transports_route,
 	search::search_events_route,

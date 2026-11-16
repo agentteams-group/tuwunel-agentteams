@@ -210,6 +210,48 @@ pub(super) async fn send_state_event_for_key_helper(
 	allowed_to_send_state_event(services, sender, room_id, event_type, state_key, json).await?;
 
 	let state_lock = services.state.mutex.lock(room_id).await;
+	if event_type == &StateEventType::from("room.meta")
+		&& state_key.is_empty()
+		&& let Ok(current) = services
+			.state_accessor
+			.room_state_get_content::<serde_json::Value>(room_id, event_type, "")
+			.await
+	{
+		let next = json.deserialize_as_unchecked::<serde_json::Value>()?;
+		if current["roomKind"] != next["roomKind"]
+			&& (current["roomKind"] == "task_room" || next["roomKind"] == "task_room")
+		{
+			return Err!(Request(Forbidden(
+				"An existing room cannot change to or from task_room."
+			)));
+		}
+		if current["roomKind"] == "task_room"
+			&& current["teamAdmin"] != next["teamAdmin"]
+			&& !services
+				.state_accessor
+				.can_delete_task_room(sender, room_id)
+				.await
+		{
+			return Err!(Request(Forbidden(
+				"Only task administrators may change the task's Team admin."
+			)));
+		}
+	}
+	if event_type
+		== &StateEventType::from(tuwunel_service::rooms::state_accessor::ROOM_ARCHIVE_EVENT_TYPE)
+		&& (!services
+			.state_accessor
+			.is_task_room(room_id)
+			.await || !services
+			.state_accessor
+			.can_archive_task_room(sender, room_id)
+			.await)
+	{
+		return Err!(Request(Forbidden(
+			"Only task rooms and authorized task administrators or leaders can archive or \
+			 restore."
+		)));
+	}
 
 	if *event_type == StateEventType::RoomMember {
 		check_member_content_size(services, sender, room_id, state_key, json).await?;

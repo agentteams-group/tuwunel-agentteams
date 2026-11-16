@@ -41,7 +41,15 @@ fn room_archive_preserves_history_and_membership_for_every_member() -> Result {
 
 	boot(
 		"room-archive",
-		["logging.enable=false", "database.pool.max_workers=16"],
+		[
+			"logging.enable=false",
+			"database.pool.max_workers=16",
+			"server_name=\"archive.test\"",
+			"admin.room.create=true",
+			"registration.grant_admin_to_first_user=false",
+			"rooms.task_room_managers=[\"@archive_manager:archive.test\"]",
+			"rooms.task_room_admins=[\"@archive_l1:archive.test\"]",
+		],
 		exercise,
 	)
 }
@@ -62,8 +70,44 @@ async fn exercise(services: &Services, base: &str) -> Result {
 	let active_room = owner
 		.create_room(&json!({"preset": "public_chat"}))
 		.await?;
+	for kind in [None, Some("dm"), Some("group_room"), Some("team_room")] {
+		let protected = owner
+			.create_room(&json!({"preset": "private_chat"}))
+			.await?;
+		if let Some(kind) = kind {
+			owner
+				.put(&format!("rooms/{protected}/state/room.meta/"), &json!({"roomKind": kind}))
+				.await?;
+		}
+		assert_eq!(
+			set_archive(&owner, &protected, "archive")
+				.await?
+				.status(),
+			403
+		);
+		let response = owner
+			.request(
+				Method::PUT,
+				&owner.url(&format!("rooms/{protected}/state/{ARCHIVE_STATE}/")),
+				&json!({"archived": true}),
+			)
+			.await?;
+		assert_eq!(response.status(), 403);
+		owner
+			.post(&format!("rooms/{protected}/leave"), &json!({}))
+			.await?;
+	}
 	worker
 		.post(&format!("rooms/{active_room}/join"), &json!({}))
+		.await?;
+	owner
+		.put(
+			&format!("rooms/{room}/state/room.meta/"),
+			&json!({
+				"roomKind": "task_room", "teamName": "archive-team",
+				"teamAdmin": {"userId": owner_id}, "humanMembers": [{"userId": worker_id}]
+			}),
+		)
 		.await?;
 	let original = owner
 		.put(
@@ -124,6 +168,79 @@ async fn exercise(services: &Services, base: &str) -> Result {
 	);
 	let state = get(&owner, &format!("rooms/{room}/state/{ARCHIVE_STATE}/")).await?;
 	assert_eq!(state, json!({"archived": true}));
+	let private_room = owner
+		.create_room(&json!({"name": "Other archived room"}))
+		.await?;
+	owner
+		.put(
+			&format!("rooms/{private_room}/state/room.meta/"),
+			&json!({"roomKind": "task_room", "leaderWorker": {"userId": owner_id}}),
+		)
+		.await?;
+	assert_eq!(
+		set_archive(&owner, &private_room, "archive")
+			.await?
+			.status(),
+		200
+	);
+	let list_url = owner.client_url("", &format!("{ARCHIVE_PATH}/archived"));
+	let listed = accepted(
+		owner
+			.request(Method::GET, &list_url, &json!({}))
+			.await?,
+	)
+	.await?;
+	assert_eq!(listed["rooms"].as_array().unwrap().len(), 2);
+	for (caller, count) in [(&worker, 1), (&outsider, 0)] {
+		let listed = accepted(
+			caller
+				.request(Method::GET, &list_url, &json!({}))
+				.await?,
+		)
+		.await?;
+		assert_eq!(listed["rooms"].as_array().unwrap().len(), count);
+	}
+	for query in [
+		format!("team_admin={owner_id}"),
+		format!("human_member={worker_id}"),
+		"team=archive-team".to_owned(),
+	] {
+		let url = format!("{list_url}?{query}");
+		let listed = accepted(
+			owner
+				.request(Method::GET, &url, &json!({}))
+				.await?,
+		)
+		.await?;
+		assert_eq!(listed["rooms"].as_array().unwrap().len(), 1);
+		assert_eq!(listed["rooms"][0]["room_id"], room.as_str());
+		assert_eq!(listed["rooms"][0]["can_archive"], true);
+		// Supplying someone else's admin identity cannot grant access.
+		let listed = accepted(
+			outsider
+				.request(Method::GET, &url, &json!({}))
+				.await?,
+		)
+		.await?;
+		assert_eq!(listed["rooms"], json!([]));
+	}
+	let url = format!("{list_url}?team_admin={worker_id}&human_member={worker_id}");
+	assert_eq!(
+		accepted(
+			owner
+				.request(Method::GET, &url, &json!({}))
+				.await?
+		)
+		.await?["rooms"],
+		json!([])
+	);
+	assert_eq!(
+		owner
+			.request(Method::GET, &format!("{list_url}?team_admin=invalid"), &json!({}))
+			.await?
+			.status(),
+		400
+	);
 	assert_archived_watcher(services, &worker_id, &room).await?;
 
 	for (member, position) in [&owner, &worker].into_iter().zip(&positions) {
@@ -212,12 +329,215 @@ async fn exercise(services: &Services, base: &str) -> Result {
 	);
 	let state = get(&worker, &format!("rooms/{room}/state/{ARCHIVE_STATE}/")).await?;
 	assert_eq!(state, json!({"archived": false}));
+	assert_eq!(
+		accepted(
+			worker
+				.request(Method::GET, &list_url, &json!({}))
+				.await?
+		)
+		.await?["rooms"],
+		json!([])
+	);
+	owner
+		.put(
+			&format!("rooms/{room}/send/m.room.message/after-restore"),
+			&json!({"msgtype": "m.text", "body": "Continue revising the result"}),
+		)
+		.await?;
+	assert!(
+		messages(&worker, &room).await?["chunk"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.any(|event| event["content"]["body"] == "Continue revising the result")
+	);
 	assert!(
 		services
 			.state_cache
 			.is_joined(&owner_id, &room)
 			.await
 	);
+	let delete_url = owner.client_url("", &format!("{ARCHIVE_PATH}/{room}/delete"));
+	assert_eq!(
+		owner
+			.request(Method::POST, &delete_url, &json!({}))
+			.await?
+			.status(),
+		403
+	);
+	let admin_id =
+		register(services, "archive_admin", "archive-admin-access-token-20261116-0001").await?;
+	services.admin.make_user_admin(&admin_id).await?;
+	register(services, "archive_manager", "archive-manager-access-token-20261116-0001").await?;
+	let admin = Client {
+		services,
+		base,
+		token: "archive-admin-access-token-20261116-0001",
+	};
+	let manager = Client {
+		services,
+		base,
+		token: "archive-manager-access-token-20261116-0001",
+	};
+	register(services, "archive_l1", "archive-l1-access-token-20261116-0001").await?;
+	let l1 = Client {
+		services,
+		base,
+		token: "archive-l1-access-token-20261116-0001",
+	};
+	for (allowed, id) in [
+		(&owner, owner_id.as_str()),
+		(&worker, worker_id.as_str()),
+		(&admin, admin_id.as_str()),
+		(&manager, "@archive_manager:archive.test"),
+		(&l1, "@archive_l1:archive.test"),
+	] {
+		let power = if id == owner_id.as_str() {
+			json!({})
+		} else {
+			json!({"users": {(id): 100}})
+		};
+		let target = owner
+			.create_room(&json!({"preset": "public_chat", "power_level_content_override": power}))
+			.await?;
+		owner.put(&format!("rooms/{target}/state/room.meta/"), &json!({"roomKind": "task_room", "teamAdmin": {"userId": owner_id}, "leaderWorker": {"userId": worker_id}})).await?;
+		allowed
+			.post(&format!("rooms/{target}/join"), &json!({}))
+			.await?;
+		assert_eq!(
+			set_archive(allowed, &target, "archive")
+				.await?
+				.status(),
+			200
+		);
+		if id == worker_id.as_str() {
+			let forged = worker.request(Method::PUT, &worker.url(&format!("rooms/{target}/state/room.meta/")), &json!({"roomKind": "task_room", "teamAdmin": {"userId": worker_id}, "leaderWorker": {"userId": worker_id}})).await?;
+			assert_eq!(forged.status(), 403, "Leader cannot promote itself to Team admin");
+			let url = owner.client_url("", &format!("{ARCHIVE_PATH}/{target}/delete"));
+			assert_eq!(
+				worker
+					.request(Method::POST, &url, &json!({}))
+					.await?
+					.status(),
+				403
+			);
+		}
+		assert_eq!(
+			set_archive(allowed, &target, "unarchive")
+				.await?
+				.status(),
+			200
+		);
+	}
+	let elevated = owner.create_room(&json!({"preset": "public_chat", "power_level_content_override": {"users": {worker_id.as_str(): 100}}})).await?;
+	owner
+		.put(
+			&format!("rooms/{elevated}/state/room.meta/"),
+			&json!({"roomKind": "task_room", "teamAdmin": {"userId": owner_id}}),
+		)
+		.await?;
+	worker
+		.post(&format!("rooms/{elevated}/join"), &json!({}))
+		.await?;
+	assert_eq!(
+		set_archive(&worker, &elevated, "archive")
+			.await?
+			.status(),
+		403,
+		"power level alone is not a business role"
+	);
+	// AgentTeams' existing creator power override needs the legacy room version.
+	let mut legacy = json!({"room_version": "12", "preset": "trusted_private_chat", "power_level_content_override": {"users": {owner_id.as_str(): 100}}});
+	assert_eq!(
+		owner
+			.request(Method::POST, &owner.url("createRoom"), &legacy)
+			.await?
+			.status(),
+		400
+	);
+	legacy["room_version"] = json!("10");
+	let legacy_room = owner.create_room(&legacy).await?;
+	owner
+		.put(
+			&format!("rooms/{legacy_room}/state/room.meta/"),
+			&json!({"roomKind": "task_room", "teamAdmin": {"userId": owner_id}}),
+		)
+		.await?;
+	assert_eq!(
+		set_archive(&owner, &legacy_room, "archive")
+			.await?
+			.status(),
+		200
+	);
+	assert_eq!(
+		set_archive(&owner, &legacy_room, "unarchive")
+			.await?
+			.status(),
+		200
+	);
+	for allowed in [&owner, &admin, &manager] {
+		let target = owner
+			.create_room(&json!({"preset": "public_chat"}))
+			.await?;
+		owner
+			.put(
+				&format!("rooms/{target}/state/room.meta/"),
+				&json!({"roomKind": "task_room", "teamAdmin": {"userId": owner_id}}),
+			)
+			.await?;
+		worker
+			.post(&format!("rooms/{target}/join"), &json!({}))
+			.await?;
+		let url = owner.client_url("", &format!("{ARCHIVE_PATH}/{target}/delete"));
+		assert_eq!(
+			allowed
+				.request(Method::POST, &url, &json!({}))
+				.await?
+				.status(),
+			403
+		);
+		assert_eq!(
+			set_archive(&owner, &target, "archive")
+				.await?
+				.status(),
+			200
+		);
+		for denied in [&worker, &outsider] {
+			assert_eq!(
+				denied
+					.request(Method::POST, &url, &json!({}))
+					.await?
+					.status(),
+				403
+			);
+		}
+		let deleted = accepted(
+			allowed
+				.request(Method::POST, &url, &json!({}))
+				.await?,
+		)
+		.await?;
+		assert_eq!(deleted["deleted"], true);
+		assert_eq!(deleted["failed_to_kick_users"], json!([]));
+		assert!(
+			!services
+				.state_cache
+				.is_joined(&worker_id, &target)
+				.await
+		);
+		assert!(services.metadata.is_banned(&target).await);
+		assert_eq!(
+			worker
+				.request(
+					Method::GET,
+					&worker.url(&format!("rooms/{target}/messages?dir=b")),
+					&json!({})
+				)
+				.await?
+				.status(),
+			403
+		);
+	}
 	Ok(())
 }
 
@@ -276,6 +596,7 @@ fn room_archive_survives_restart() -> Result {
 					alias["room_id"].as_str().unwrap().try_into()?
 				};
 				if phase == "seed" {
+					client.put(&format!("rooms/{room}/state/room.meta/"), &json!({"roomKind": "task_room", "teamAdmin": {"userId": format!("@archive_persist:{}", services.globals.server_name())}})).await?;
 					assert!(
 						sync(&client, "").await?["rooms"]["join"]
 							.get(room.as_str())
