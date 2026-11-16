@@ -3,6 +3,7 @@
 //! The service resolves current and historical state into typed events. It also
 //! centralizes visibility, redaction, erasure, invite, and tombstone decisions.
 
+mod archive;
 mod checked;
 mod erased;
 mod room_state;
@@ -43,6 +44,9 @@ use tuwunel_matrix::{
 };
 
 use crate::rooms::{state_compressor::CompressedState, timeline::Mapped};
+
+/// Custom room state used to suspend sync delivery without changing membership.
+pub const ROOM_ARCHIVE_EVENT_TYPE: &str = "org.agentteams.room.archive";
 
 /// Resolves room state and answers state-based authorization questions.
 ///

@@ -69,6 +69,14 @@ pub(super) async fn collect(
 		.filter(|_| conn.globalsince != 0)
 		.stream()
 		.wide_filter_map(async |room_id| {
+			if services
+				.state_accessor
+				.is_room_archived(room_id)
+				.await
+			{
+				return None;
+			}
+
 			let joined = services
 				.state_cache
 				.get_joined_count(room_id, sender_user)

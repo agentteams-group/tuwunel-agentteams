@@ -59,6 +59,13 @@ pub(super) fn collect_rooms<'a>(
 		.rooms_departed(sender_user)
 		.ready_filter(|room_id| filter.room.matches(room_id))
 		.map(ToOwned::to_owned)
+		.broad_filter_map(async move |room_id| {
+			(!services
+				.state_accessor
+				.is_room_archived(&room_id)
+				.await)
+				.then_some(room_id)
+		})
 		.broad_filter_map(move |room_id| {
 			handle_left_room(
 				services,

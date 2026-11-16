@@ -112,6 +112,14 @@ async fn matcher(
 ) -> Option<WindowRoom> {
 	let SyncInfo { services, sender_user, .. } = sync_info;
 
+	if services
+		.state_accessor
+		.is_room_archived(&room_id)
+		.await
+	{
+		return None;
+	}
+
 	let (matched, lists) = conn
 		.lists
 		.iter()
@@ -400,6 +408,14 @@ where
 		.iter()
 		.stream()
 		.broad_filter_map(async |(room_id, _)| {
+			if services
+				.state_accessor
+				.is_room_archived(room_id)
+				.await
+			{
+				return None;
+			}
+
 			let room = indexed_subscriptions
 				.as_ref()
 				.map_or_else(

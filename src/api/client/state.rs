@@ -198,7 +198,7 @@ pub(crate) async fn get_state_events_for_empty_key_route(
 		.map(RumaResponse)
 }
 
-async fn send_state_event_for_key_helper(
+pub(super) async fn send_state_event_for_key_helper(
 	services: &Services,
 	sender: &UserId,
 	room_id: &RoomId,
@@ -254,6 +254,12 @@ async fn send_state_event_for_key_helper(
 			&state_lock,
 		)
 		.await?;
+
+	if event_type
+		== &StateEventType::from(tuwunel_service::rooms::state_accessor::ROOM_ARCHIVE_EVENT_TYPE)
+	{
+		services.sync.notify_room_archive_changed();
+	}
 
 	Ok(event_id)
 }

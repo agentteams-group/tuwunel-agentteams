@@ -32,6 +32,7 @@ use crate::rooms::short::ShortStateHash;
 pub struct Service {
 	services: Arc<crate::services::OnceServices>,
 	connections: Connections,
+	room_archive_changed: tokio::sync::watch::Sender<()>,
 	db: Data,
 }
 
@@ -201,11 +202,16 @@ impl crate::Service for Service {
 			},
 			services: args.services.clone(),
 			connections: Default::default(),
+			room_archive_changed: tokio::sync::watch::channel(()).0,
 		}))
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
+
+/// Wake parked syncs after an archive state change, including rooms not watched.
+#[implement(Service)]
+pub fn notify_room_archive_changed(&self) { self.room_archive_changed.send_replace(()); }
 
 /// Drops the loaded connections that match every filter given, returning how
 /// many were dropped.

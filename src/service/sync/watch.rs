@@ -84,6 +84,14 @@ where
 	.into_iter()
 	.collect();
 
+	let mut archive_changes = self.room_archive_changed.subscribe();
+	futures.push(
+		async move {
+			archive_changes.changed().await.ok();
+		}
+		.boxed(),
+	);
+
 	if let Some(device_id) = device_id {
 		// Return when *any* user changed their key
 		// TODO: only send for user they share a room with
@@ -103,6 +111,15 @@ where
 	// advances; the rocksdb slice contract forbids stashing them.
 	pin_mut!(rooms);
 	while let Some(room_id) = rooms.next().await {
+		if self
+			.services
+			.state_accessor
+			.is_room_archived(room_id)
+			.await
+		{
+			continue;
+		}
+
 		let Ok(short_roomid) = self.services.short.get_shortroomid(room_id).await else {
 			continue;
 		};
