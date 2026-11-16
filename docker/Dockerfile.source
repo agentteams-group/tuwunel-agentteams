@@ -53,9 +53,9 @@ ENV ROCKSDB_INCLUDE_DIR="${ROCKSDB_INCLUDE_DIR}"
 ENV sched_policy=${sched_policy}
 ENV sched_prio=${sched_prio}
 RUN \
---mount=type=cache,dst=${RUSTUP_HOME}/downloads,sharing=locked \
---mount=type=cache,dst=${CARGO_HOME}/registry,sharing=locked \
---mount=type=cache,dst=${CARGO_HOME}/git,sharing=locked \
+--mount=type=cache,dst=${RUSTUP_HOME}/downloads,sharing=private \
+--mount=type=cache,dst=${CARGO_HOME}/registry,sharing=private \
+--mount=type=cache,dst=${CARGO_HOME}/git,sharing=private \
 <<EOF
     set -eux
     rustup run ${rust_toolchain} sched_wrap.sh \
@@ -78,9 +78,9 @@ WORKDIR /usr/src/tuwunel
 ENV sched_policy=${sched_policy}
 ENV sched_prio=${sched_prio}
 RUN \
---mount=type=cache,dst=${RUSTUP_HOME}/downloads,sharing=locked \
---mount=type=cache,dst=${CARGO_HOME}/registry,sharing=locked \
---mount=type=cache,dst=${CARGO_HOME}/git,sharing=locked \
+--mount=type=cache,dst=${RUSTUP_HOME}/downloads,sharing=private \
+--mount=type=cache,dst=${CARGO_HOME}/registry,sharing=private \
+--mount=type=cache,dst=${CARGO_HOME}/git,sharing=private \
 <<EOF
     set -euxo pipefail
     rustup run ${rust_toolchain} sched_wrap.sh \
