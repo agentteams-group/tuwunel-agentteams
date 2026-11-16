@@ -106,7 +106,8 @@ The feature branch is based on the upstream **v2.0.0** release tag
 
 This feature adds **no database tables, column families, schema version,
 migration, message encoding or membership encoding**. Its only persisted data
-is a server-owned room account-data record stored in the existing account-data maps. A previous feature-branch room-state marker is read as a fallback until the first lifecycle operation replaces it.
+is a server-owned room account-data record stored in the existing account-data
+maps. Ordinary room state and member-owned account data cannot set this flag.
 Rooms created before installing this feature have no flag and behave as before.
 Archive state persists across restarts.
 

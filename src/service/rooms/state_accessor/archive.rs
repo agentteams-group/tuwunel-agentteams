@@ -8,8 +8,7 @@ use tuwunel_core::implement;
 /// Rooms without the optional archive state retain their normal sync behavior.
 #[implement(super::Service)]
 pub async fn is_room_archived(&self, room_id: &RoomId) -> bool {
-	if let Ok(event) = self
-		.services
+	self.services
 		.account_data
 		.get_room::<Value>(
 			room_id,
@@ -17,17 +16,7 @@ pub async fn is_room_archived(&self, room_id: &RoomId) -> bool {
 			RoomAccountDataEventType::from(super::ROOM_ARCHIVE_EVENT_TYPE),
 		)
 		.await
-	{
-		return event["content"]["archived"].as_bool() == Some(true)
-			&& self.is_task_room(room_id).await;
-	}
-	self.room_state_get_content(
-		room_id,
-		&StateEventType::from(super::ROOM_ARCHIVE_EVENT_TYPE),
-		"",
-	)
-	.await
-	.is_ok_and(|content: Value| content.get("archived").and_then(Value::as_bool) == Some(true))
+		.is_ok_and(|event| event["content"]["archived"].as_bool() == Some(true))
 		&& self.is_task_room(room_id).await
 }
 

@@ -436,6 +436,25 @@ async fn exercise(services: &Services, base: &str) -> Result {
 		"power level alone is not a business role"
 	);
 	// AgentTeams' existing creator power override needs the legacy room version.
+	let forged = worker
+		.create_room(&json!({"initial_state": [
+			{"type": "room.meta", "state_key": "", "content": {"roomKind": "task_room"}},
+			{"type": ARCHIVE_STATE, "state_key": "", "content": {"archived": true}}
+		]}))
+		.await?;
+	assert!(
+		!services
+			.state_accessor
+			.is_room_archived(&forged)
+			.await,
+		"room state cannot forge the server-owned archive flag"
+	);
+	assert_eq!(
+		set_archive(&worker, &forged, "archive")
+			.await?
+			.status(),
+		403
+	);
 	let mut legacy = json!({"room_version": "12", "preset": "trusted_private_chat", "power_level_content_override": {"users": {owner_id.as_str(): 100}}});
 	assert_eq!(
 		owner

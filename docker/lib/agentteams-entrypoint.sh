@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-config="${TUWUNEL_CONFIG:-/etc/tuwunel/tuwunel.json}"
+config="${TUWUNEL_CONFIG:-/etc/tuwunel/tuwunel.toml}"
 if [[ -f "$config" ]]; then
     exec tuwunel -c "$config" "$@"
 fi
