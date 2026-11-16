@@ -11,6 +11,7 @@ ARG var_cache
 ARG var_lib_apt
 ARG packages
 ARG DEBIAN_FRONTEND
+ARG APT_MIRROR
 
 ENV DEBIAN_FRONTEND="${DEBIAN_FRONTEND}"
 RUN \
@@ -23,6 +24,10 @@ RUN \
     keep_downloaded='Binary::apt::APT::Keep-Downloaded-Packages "true";'
     echo "$keep_downloaded" > /etc/apt/apt.conf.d/keep-downloaded
     rm -f /etc/apt/apt.conf.d/docker-clean
+
+    if [ -n "${APT_MIRROR}" ]; then
+        sed -i "s|http://deb.debian.org|http://${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources
+    fi
 
     apt-get -y -U install --no-install-recommends ${packages}
 EOF

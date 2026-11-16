@@ -1,0 +1,11 @@
+# syntax = docker/dockerfile:1.11-labs
+
+# Reuse the upstream install target, including its statically linked binary.
+FROM input AS shell
+RUN command -v sh && command -v bash
+COPY --chmod=0755 docker/lib/agentteams-entrypoint.sh /usr/local/bin/tuwunel-entrypoint.sh
+RUN mkdir -p /etc/tuwunel /var/lib/tuwunel
+ENV TUWUNEL_CONFIG=/etc/tuwunel/tuwunel.json
+EXPOSE 8008 8448
+WORKDIR /var/lib/tuwunel
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/tuwunel-entrypoint.sh"]
