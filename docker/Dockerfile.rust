@@ -28,6 +28,8 @@ ARG rustup_profile="minimal"
 ARG CARGO_TERM_VERBOSE
 ARG rustup_components
 ARG cargo_installs
+ARG RUSTUP_DIST_SERVER=https://static.rust-lang.org
+ARG RUSTUP_UPDATE_ROOT=https://static.rust-lang.org/rustup
 ARG sched_policy="--batch"
 ARG sched_prio=0
 
@@ -36,6 +38,8 @@ ENV CARGO_TARGET="${rust_target}"
 ENV RUSTUP_HOME="${RUSTUP_HOME}"
 ENV CARGO_HOME="${CARGO_HOME}"
 ENV PATH="${CARGO_HOME}/bin:$PATH"
+ENV RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER}"
+ENV RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT}"
 ENV sched_policy=${sched_policy}
 ENV sched_prio=${sched_prio}
 RUN \

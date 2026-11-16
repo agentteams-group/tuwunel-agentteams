@@ -198,7 +198,7 @@ pub(crate) async fn get_state_events_for_empty_key_route(
 		.map(RumaResponse)
 }
 
-async fn send_state_event_for_key_helper(
+pub(super) async fn send_state_event_for_key_helper(
 	services: &Services,
 	sender: &UserId,
 	room_id: &RoomId,
@@ -210,6 +210,32 @@ async fn send_state_event_for_key_helper(
 	allowed_to_send_state_event(services, sender, room_id, event_type, state_key, json).await?;
 
 	let state_lock = services.state.mutex.lock(room_id).await;
+	if event_type == &StateEventType::from("room.meta")
+		&& state_key.is_empty()
+		&& let Ok(current) = services
+			.state_accessor
+			.room_state_get_content::<serde_json::Value>(room_id, event_type, "")
+			.await
+	{
+		let next = json.deserialize_as_unchecked::<serde_json::Value>()?;
+		if current["roomKind"] != next["roomKind"]
+			&& (current["roomKind"] == "task_room" || next["roomKind"] == "task_room")
+		{
+			return Err!(Request(Forbidden(
+				"An existing room cannot change to or from task_room."
+			)));
+		}
+		if current["roomKind"] == "task_room" && current["teamName"] != next["teamName"] {
+			return Err!(Request(Forbidden("A task room cannot change its owning team.")));
+		}
+	}
+	if event_type
+		== &StateEventType::from(tuwunel_service::rooms::state_accessor::ROOM_ARCHIVE_EVENT_TYPE)
+	{
+		return Err!(Request(Forbidden(
+			"Archive state is server-owned; use the Controller's task-room API."
+		)));
+	}
 
 	if *event_type == StateEventType::RoomMember {
 		check_member_content_size(services, sender, room_id, state_key, json).await?;
@@ -254,6 +280,12 @@ async fn send_state_event_for_key_helper(
 			&state_lock,
 		)
 		.await?;
+
+	if event_type
+		== &StateEventType::from(tuwunel_service::rooms::state_accessor::ROOM_ARCHIVE_EVENT_TYPE)
+	{
+		services.sync.notify_room_archive_changed();
+	}
 
 	Ok(event_id)
 }

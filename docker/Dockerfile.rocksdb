@@ -19,7 +19,7 @@ RUN <<EOF
     git remote add origin "${rocksdb_url}"
     git fetch --depth 1 origin "${rocksdb_rev}"
     git checkout --detach FETCH_HEAD
-    git submodule update --init "${librocksdb_submodule}"
+    git submodule update --init --depth 1 "${librocksdb_submodule}"
 EOF
 
 

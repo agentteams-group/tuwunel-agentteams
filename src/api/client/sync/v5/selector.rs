@@ -112,6 +112,14 @@ async fn matcher(
 ) -> Option<WindowRoom> {
 	let SyncInfo { services, sender_user, .. } = sync_info;
 
+	if services
+		.state_accessor
+		.is_room_archived(&room_id)
+		.await
+	{
+		return None;
+	}
+
 	let (matched, lists) = conn
 		.lists
 		.iter()
@@ -162,6 +170,11 @@ async fn matcher(
 			.last_timeline_count(None, &room_id, Some(conn.next_batch.into()))
 			.await
 			.map(PduCount::into_unsigned);
+		let restored = services
+			.state_accessor
+			.room_restore_count(&room_id)
+			.await;
+		let result = result.map(|count| count.max(restored.min(conn.next_batch)));
 
 		activity_probe(result, &room_id, "timeline", false)
 	};
@@ -400,6 +413,14 @@ where
 		.iter()
 		.stream()
 		.broad_filter_map(async |(room_id, _)| {
+			if services
+				.state_accessor
+				.is_room_archived(room_id)
+				.await
+			{
+				return None;
+			}
+
 			let room = indexed_subscriptions
 				.as_ref()
 				.map_or_else(

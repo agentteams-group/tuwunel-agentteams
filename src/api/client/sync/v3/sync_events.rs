@@ -448,6 +448,13 @@ fn collect_joined_rooms<'a>(
 		.rooms_joined(sender_user)
 		.ready_filter(|&room_id| filter.room.matches(room_id))
 		.map(ToOwned::to_owned)
+		.broad_filter_map(async move |room_id| {
+			(!services
+				.state_accessor
+				.is_room_archived(&room_id)
+				.await)
+				.then_some(room_id)
+		})
 		.broad_filter_map(move |room_id| {
 			load_joined_room(
 				services,
@@ -490,6 +497,13 @@ async fn collect_invited_rooms<'a>(
 		.state_cache
 		.rooms_invited_state(sender_user)
 		.ready_filter(|(room_id, _)| filter.room.matches(room_id))
+		.broad_filter_map(async |(room_id, state)| {
+			(!services
+				.state_accessor
+				.is_room_archived(&room_id)
+				.await)
+				.then_some((room_id, state))
+		})
 		.ready_filter(|(room_id, invite_state)| {
 			invite_permitted(sender_user, room_id, invite_filter, invite_state)
 		})
@@ -526,6 +540,13 @@ async fn collect_knocked_rooms<'a>(
 		.state_cache
 		.rooms_knocked_state(sender_user)
 		.ready_filter(|(room_id, _)| filter.room.matches(room_id))
+		.broad_filter_map(async |(room_id, state)| {
+			(!services
+				.state_accessor
+				.is_room_archived(&room_id)
+				.await)
+				.then_some((room_id, state))
+		})
 		.fold_default(async |mut knocked_rooms: BTreeMap<_, _>, (room_id, knock_state)| {
 			let knock_count = services
 				.state_cache

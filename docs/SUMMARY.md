@@ -55,6 +55,7 @@
 - [Bridge and Application Services](appservices.md)
 - [Push Notifications](pushers.md)
 - [Policy and Moderation](moderation.md)
+- [Room Archive Extension](room-archive.md)
 
 # Servicing
 

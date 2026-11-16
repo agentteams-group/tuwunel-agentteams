@@ -83,7 +83,7 @@ rust_nightly="${rust_nightly:-nightly}"
 # rust-toolchain.toml, for all callers; 'stable' reaches rustup as the moving
 # stable channel. see bake.hcl
 toolchain_toml="$docker_dir/../rust-toolchain.toml"
-rust_msrv=$(grep "channel = " "$toolchain_toml" | cut -d'=' -f2 | sed 's/\s"\|"$//g')
+rust_msrv=$(awk -F '"' '/^channel = / { print $2; exit }' "$toolchain_toml")
 
 # Package metadata for OCI image labels/annotations. Mirrors the priority
 # used by src/core/info/version.rs::semantic(): `git describe --tags` falling

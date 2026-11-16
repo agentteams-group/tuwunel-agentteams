@@ -144,6 +144,22 @@ fn register_client_keys_and_backup_routes(router: Router<State>) -> Router<State
 
 fn register_client_room_routes(router: Router<State>) -> Router<State> {
 	router
+		.route(
+			"/_matrix/client/unstable/org.agentteams/rooms/{room_id}/delete",
+			post(client::delete_archived_room_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.agentteams/rooms/archived",
+			get(client::archived_rooms_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.agentteams/rooms/{room_id}/archive",
+			post(client::archive_room_route).get(client::room_archive_status_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.agentteams/rooms/{room_id}/unarchive",
+			post(client::unarchive_room_route),
+		)
 		.ruma_route(&client::appservice_ping)
 		.ruma_route(&client::set_read_marker_route)
 		.ruma_route(&client::create_receipt_route)

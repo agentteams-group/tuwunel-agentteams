@@ -1238,6 +1238,21 @@ target "docker" {
 EOF
 }
 
+target "docker-shell" {
+    name = elem("docker-shell", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target])
+    tags = ["tuwunel-shell:latest"]
+    matrix = cargo_rust_feat_sys
+    inherits = [elem("install", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target])]
+    contexts = {
+        input = elem("target:install", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target])
+    }
+    dockerfile = "${docker_dir}/Dockerfile.shell"
+    target = "shell"
+    labels = {
+        "org.opencontainers.image.source" = "https://github.com/agentteams-group/tuwunel-agentteams"
+    }
+}
+
 target "static" {
     name = elem("static", [cargo_profile, rust_toolchain, rust_target, feat_set, sys_name, sys_version, sys_target])
     tags = [
